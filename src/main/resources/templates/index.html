@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="th" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบเช็คชื่อเข้าเรียนอัจฉริยะ (GPS Location + Face Scan Check-In)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f3f6fb;
+            font-family: 'Sarabun', 'Segoe UI', Tahoma, sans-serif;
+        }
+        .hero-banner {
+            background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+            color: #fff;
+            padding: 2rem 0;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.12);
+        }
+        .card {
+            border: none;
+            border-radius: 14px;
+            box-shadow: 0 3px 12px rgba(0,0,0,0.06);
+        }
+        .webcam-box {
+            width: 100%;
+            max-width: 360px;
+            height: 250px;
+            background: #111;
+            border-radius: 10px;
+            object-fit: cover;
+            border: 2px solid #dee2e6;
+        }
+        .avatar-thumb {
+            width: 64px;
+            height: 64px;
+            object-fit: cover;
+            border-radius: 50%;
+            border: 2px solid #0d6efd;
+        }
+        .compare-img {
+            max-height: 170px;
+            object-fit: contain;
+            border-radius: 8px;
+            border: 2px solid #dee2e6;
+            background: #fff;
+        }
+        .step-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #0d6efd;
+            color: #fff;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="hero-banner">
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center flex-wrap">
+            <div>
+                <h2 class="fw-bold mb-1">ระบบเช็คชื่อเข้าเรียนอัจฉริยะ (Smart Location & Face Scan Check-In)</h2>
+                <p class="mb-0 opacity-75">
+                    ต้องผ่านการยืนยันตัวตนครบทั้ง <strong>1. พิกัดตำแหน่ง GPS (Geofencing)</strong> และ <strong>2. สแกนใบหน้า (LBPH / Dlib ResNet-34 / ArcFace)</strong>
+                </p>
+            </div>
+            <div class="text-end mt-2 mt-md-0">
+                <span class="badge bg-info text-dark px-3 py-2 fs-6" th:text="${classroomName}"></span>
+                <div class="small opacity-75 mt-1">
+                    พิกัดห้องเรียน: (<span id="targetLatDisplay" th:text="${classroomLat}"></span>, <span id="targetLngDisplay" th:text="${classroomLng}"></span>)
+                    | รัศมีไม่เกิน <strong id="targetRadiusDisplay" th:text="${allowedRadiusMeters}"></strong> เมตร
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container pb-5">
+
+    <!-- แสดงผลลัพธ์การเช็คชื่อล่าสุด (ถ้ามี) -->
+    <div th:if="${latestCheckIn != null}" class="card mb-4 border-2"
+         th:classappend="${latestCheckIn.overallSuccess ? 'border-success' : 'border-danger'}">
+        <div class="card-header py-3 text-white d-flex justify-content-between align-items-center"
+             th:classappend="${latestCheckIn.overallSuccess ? 'bg-success' : 'bg-danger'}">
+            <h5 class="mb-0 fw-bold">
+                <span th:if="${latestCheckIn.overallSuccess}">เช็คชื่อสำเร็จ (CHECK-IN APPROVED)</span>
+                <span th:if="${!latestCheckIn.overallSuccess}">เช็คชื่อไม่ผ่านเกณฑ์ (CHECK-IN REJECTED)</span>
+            </h5>
+            <span class="badge bg-light text-dark" th:text="${latestCheckIn.checkInTime}"></span>
+        </div>
+        <div class="card-body">
+            <p class="fs-5 fw-semibold mb-3" th:text="${latestCheckIn.summaryMessage}"></p>
+
+            <div class="row g-3 mb-3">
+                <!-- เงื่อนไขที่ 1: Location -->
+                <div class="col-md-6">
+                    <div class="p-3 rounded border" th:classappend="${latestCheckIn.locationVerified ? 'bg-success-subtle border-success' : 'bg-danger-subtle border-danger'}">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <strong>เงื่อนไขที่ 1: พิกัดตำแหน่ง (GPS Geofence)</strong>
+                            <span th:if="${latestCheckIn.locationVerified}" class="badge bg-success">ผ่าน (อยู่ในพื้นที่)</span>
+                            <span th:if="${!latestCheckIn.locationVerified}" class="badge bg-danger">ไม่ผ่าน (อยู่นอกพื้นที่)</span>
+                        </div>
+                        <div class="small mt-2">
+                            พิกัดของคุณ: (<span th:text="${latestCheckIn.latitude}"></span>, <span th:text="${latestCheckIn.longitude}"></span>)<br>
+                            ระยะห่างจากห้องเรียน: <strong th:text="${latestCheckIn.distanceMeters + ' เมตร'}"></strong>
+                            (เกณฑ์อนุญาตไม่เกิน <span th:text="${latestCheckIn.allowedRadiusMeters + ' เมตร'}"></span>)
+                        </div>
+                    </div>
+                </div>
+
+                <!-- เงื่อนไขที่ 2: Face Scan -->
+                <div class="col-md-6">
+                    <div class="p-3 rounded border" th:classappend="${latestCheckIn.faceVerified ? 'bg-success-subtle border-success' : 'bg-danger-subtle border-danger'}">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <strong>เงื่อนไขที่ 2: สแกนใบหน้า (Face Verification)</strong>
+                            <span th:if="${latestCheckIn.faceVerified}" class="badge bg-success">ผ่าน (ใบหน้าตรงกัน)</span>
+                            <span th:if="${!latestCheckIn.faceVerified}" class="badge bg-danger">ไม่ผ่าน (ใบหน้าไม่ตรง)</span>
+                        </div>
+                        <div class="small mt-2">
+                            นักศึกษา: <strong th:text="${latestCheckIn.studentId + ' - ' + latestCheckIn.studentName}"></strong><br>
+                            นโยบายการตัดสิน: <code th:text="${latestCheckIn.selectedPolicy}"></code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ภาพเปรียบเทียบและตารางผลลัพธ์ 3 อัลกอริทึม -->
+            <div class="row g-3 align-items-center">
+                <div class="col-md-4 text-center" th:if="${latestStudentProfile != null}">
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <div class="small fw-semibold mb-1">ภาพที่ลงทะเบียน</div>
+                            <img th:src="${latestStudentProfile.previewBase64}" class="compare-img w-100" alt="Registered Face">
+                        </div>
+                        <div class="col-6">
+                            <div class="small fw-semibold mb-1">ภาพสแกนเช็คชื่อ</div>
+                            <img th:src="${latestCheckIn.capturedImageBase64}" class="compare-img w-100" alt="Live Check-In Face">
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-8" th:if="${latestCheckIn.algorithmResults != null}">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>อัลกอริทึม</th>
+                                    <th>ตัวชี้วัด</th>
+                                    <th class="text-center">ค่าที่ได้</th>
+                                    <th class="text-center">เกณฑ์</th>
+                                    <th class="text-center">ผลลัพธ์</th>
+                                    <th class="text-end">เวลา</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr th:each="res : ${latestCheckIn.algorithmResults}">
+                                    <td class="fw-semibold small" th:text="${res.name}"></td>
+                                    <td class="small" th:text="${res.message}"></td>
+                                    <td class="text-center fw-bold" th:text="${res.score}"></td>
+                                    <td class="text-center"><code th:text="${res.threshold}"></code></td>
+                                    <td class="text-center">
+                                        <span th:if="${res.status == 'OK' and res.match}" class="badge bg-success">ผ่าน</span>
+                                        <span th:if="${res.status == 'OK' and !res.match}" class="badge bg-danger">ไม่ผ่าน</span>
+                                        <span th:if="${res.status != 'OK'}" class="badge bg-warning text-dark" th:text="${res.status}"></span>
+                                    </td>
+                                    <td class="text-end small" th:text="${res.executionMs + ' ms'}"></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <!-- คอลัมน์ซ้าย: ฟอร์มเช็คชื่อเข้าเรียน (Location + Face Scan) -->
+        <div class="col-lg-7">
+            <div class="card h-100">
+                <div class="card-header bg-white py-3 border-bottom">
+                    <h5 class="mb-0 fw-bold text-primary">จุดเช็คชื่อเข้าเรียน (Student Check-In Terminal)</h5>
+                </div>
+                <div class="card-body">
+                    <div th:if="${checkInError}" class="alert alert-danger" th:text="${checkInError}"></div>
+
+                    <form th:action="@{/checkin}" method="post" enctype="multipart/form-data" id="checkInForm">
+                        <!-- ขั้นตอนที่ 1: เลือกนักศึกษา -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <span class="step-badge">1</span> เลือกรหัสนักศึกษาที่ต้องการเช็คชื่อ
+                            </label>
+                            <select name="studentId" class="form-select" required>
+                                <option value="" disabled selected>-- เลือกนักศึกษาที่ลงทะเบียนแล้ว --</option>
+                                <option th:each="s : ${students}" th:value="${s.studentId}"
+                                        th:text="${s.studentId + ' - ' + s.fullName}"></option>
+                            </select>
+                            <div th:if="${#lists.isEmpty(students)}" class="form-text text-danger">
+                                * ยังไม่มีรายชื่อนักศึกษาในระบบ กรุณาลงทะเบียนนักศึกษาที่กล่องด้านขวามือก่อนครับ
+                            </div>
+                        </div>
+
+                        <!-- ขั้นตอนที่ 2: ยืนยันพิกัด GPS -->
+                        <div class="mb-4 p-3 bg-light rounded border">
+                            <div class="d-flex justify-content-between align-items-center flex-wrap mb-2">
+                                <label class="form-label fw-bold mb-0">
+                                    <span class="step-badge">2</span> ยืนยันพิกัดตำแหน่ง GPS (Location Check)
+                                </label>
+                                <div class="btn-group btn-group-sm mt-2 mt-sm-0">
+                                    <button type="button" class="btn btn-primary" onclick="fetchRealGps()">
+                                        ดึงพิกัด GPS ปัจจุบัน (Browser GPS)
+                                    </button>
+                                    <button type="button" class="btn btn-outline-success" onclick="simulateInsideClassroom()">
+                                        จำลองอยู่ในห้องเรียน
+                                    </button>
+                                    <button type="button" class="btn btn-outline-danger" onclick="simulateOutsideClassroom()">
+                                        จำลองอยู่นอกห้องเรียน (ไกล 500m)
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="row g-2 mt-1">
+                                <div class="col-sm-6">
+                                    <label class="small text-muted">ละติจูดของคุณ (Latitude)</label>
+                                    <input type="number" step="any" name="latitude" id="userLat" class="form-control form-control-sm" required readonly>
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="small text-muted">ลองจิจูดของคุณ (Longitude)</label>
+                                    <input type="number" step="any" name="longitude" id="userLng" class="form-control form-control-sm" required readonly>
+                                </div>
+                            </div>
+                            <div id="gpsStatusBanner" class="alert alert-secondary py-2 px-3 mt-2 mb-0 small">
+                                กรุณากดปุ่ม <strong>"ดึงพิกัด GPS ปัจจุบัน"</strong> หรือเลือกจำลองพิกัดเพื่อตรวจสอบระยะห่างจากห้องเรียน
+                            </div>
+                        </div>
+
+                        <!-- ขั้นตอนที่ 3: สแกนใบหน้า -->
+                        <div class="mb-4 p-3 bg-light rounded border">
+                            <label class="form-label fw-bold">
+                                <span class="step-badge">3</span> สแกนใบหน้าขณะเช็คชื่อ (Live Webcam หรือ อัปโหลดไฟล์ภาพ)
+                            </label>
+
+                            <div class="text-center my-2">
+                                <video id="checkinVideo" class="webcam-box d-none" autoplay playsinline></video>
+                                <canvas id="checkinCanvas" class="d-none"></canvas>
+                                <img id="checkinCapturePreview" class="webcam-box d-none" alt="Captured Face">
+                            </div>
+
+                            <div class="d-flex gap-2 justify-content-center mb-3">
+                                <button type="button" class="btn btn-sm btn-dark" onclick="startCamera('checkinVideo')">
+                                    เปิดกล้องเว็บแคม
+                                </button>
+                                <button type="button" class="btn btn-sm btn-warning fw-semibold" onclick="capturePhoto('checkinVideo', 'checkinCanvas', 'checkinCapturePreview', 'liveWebcamBase64')">
+                                    ถ่ายภาพสแกนใบหน้า
+                                </button>
+                            </div>
+
+                            <input type="hidden" name="liveWebcamBase64" id="liveWebcamBase64">
+
+                            <div class="mt-2">
+                                <label class="small text-muted">หรืออัปโหลดไฟล์ภาพใบหน้าจากเครื่อง (กรณีไม่ใช้กล้องเว็บแคม):</label>
+                                <input type="file" name="liveFaceFile" class="form-control form-control-sm" accept="image/*">
+                            </div>
+
+                            <div class="mt-3">
+                                <label class="form-label small fw-semibold">เกณฑ์การตัดสินผลใบหน้า (Face Verification Policy):</label>
+                                <select name="verificationPolicy" class="form-select form-select-sm">
+                                    <option value="MAJORITY" selected>Majority Vote — ผ่านอย่างน้อย 2 ใน 3 อัลกอริทึม (แนะนำ)</option>
+                                    <option value="ARCFACE">InsightFace ArcFace (512-D) เป็นหลัก</option>
+                                    <option value="DLIB">Dlib ResNet-34 (128-D) เป็นหลัก</option>
+                                    <option value="LBPH">LBPH (OpenCV Classic) เป็นหลัก</option>
+                                    <option value="ALL">Strict Mode — ต้องผ่านครบทั้ง 3 อัลกอริทึม</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn btn-success w-100 py-2 fw-bold fs-5">
+                            ยืนยันพิกัด GPS + สแกนใบหน้าเช็คชื่อเข้าเรียน
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- คอลัมน์ขวา: ลงทะเบียนนักศึกษาใหม่ + ตั้งค่าพิกัดห้องเรียน -->
+        <div class="col-lg-5">
+            <!-- กล่องลงทะเบียนนักศึกษา (Face Enrollment) -->
+            <div class="card mb-4">
+                <div class="card-header bg-white py-3 border-bottom">
+                    <h5 class="mb-0 fw-bold text-primary">ลงทะเบียนใบหน้านักศึกษา (Student Enrollment)</h5>
+                </div>
+                <div class="card-body">
+                    <div th:if="${registerSuccess}" class="alert alert-success py-2 small" th:text="${registerSuccess}"></div>
+                    <div th:if="${registerError}" class="alert alert-danger py-2 small" th:text="${registerError}"></div>
+
+                    <form th:action="@{/register-student}" method="post" enctype="multipart/form-data">
+                        <div class="mb-2">
+                            <label class="form-label small fw-semibold">รหัสนักศึกษา (Student ID)</label>
+                            <input type="text" name="studentId" class="form-control form-control-sm" placeholder="เช่น 673380283-6" required>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label small fw-semibold">ชื่อ-นามสกุล (Full Name)</label>
+                            <input type="text" name="fullName" class="form-control form-control-sm" placeholder="เช่น สมชาย ใจดี" required>
+                        </div>
+
+                        <div class="text-center my-2">
+                            <video id="regVideo" class="webcam-box d-none" autoplay playsinline></video>
+                            <canvas id="regCanvas" class="d-none"></canvas>
+                            <img id="regCapturePreview" class="webcam-box d-none" alt="Registered Capture">
+                        </div>
+
+                        <div class="d-flex gap-2 justify-content-center my-2">
+                            <button type="button" class="btn btn-sm btn-outline-dark" onclick="startCamera('regVideo')">
+                                เปิดกล้องถ่ายใบหน้า
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="capturePhoto('regVideo', 'regCanvas', 'regCapturePreview', 'webcamBase64')">
+                                ถ่ายภาพลงทะเบียน
+                            </button>
+                        </div>
+                        <input type="hidden" name="webcamBase64" id="webcamBase64">
+
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">หรืออัปโหลดไฟล์ภาพใบหน้าหน้าตรง:</label>
+                            <input type="file" name="faceFile" class="form-control form-control-sm" accept="image/*">
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-sm w-100 fw-semibold">
+                            บันทึกข้อมูลลงทะเบียนนักศึกษา
+                        </button>
+                    </form>
+
+                    <!-- รายชื่อนักศึกษาที่ลงทะเบียนแล้ว -->
+                    <div th:if="${!#lists.isEmpty(students)}" class="mt-3 pt-3 border-top">
+                        <div class="small fw-bold mb-2">รายชื่อนักศึกษาที่ลงทะเบียนแล้ว (<span th:text="${#lists.size(students)}"></span> คน):</div>
+                        <div class="d-flex flex-column gap-2">
+                            <div th:each="s : ${students}" class="d-flex align-items-center gap-2 p-2 bg-light rounded border">
+                                <img th:src="${s.previewBase64}" class="avatar-thumb" alt="Student">
+                                <div class="small">
+                                    <div class="fw-bold" th:text="${s.studentId}"></div>
+                                    <div th:text="${s.fullName}"></div>
+                                    <div class="text-muted" style="font-size: 0.75rem;" th:text="${'ลงทะเบียนเมื่อ: ' + s.registeredAt}"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- กล่องตั้งค่าพิกัดห้องเรียน (Classroom Geofence Settings) -->
+            <div class="card">
+                <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0 fw-bold text-secondary">ตั้งค่าพิกัดห้องเรียน (Geofence Settings สำหรับผู้สอน)</h6>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setClassroomToMyLocation()">
+                        ใช้พิกัดปัจจุบันของฉันเป็นห้องเรียน
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div th:if="${geofenceSuccess}" class="alert alert-info py-2 small" th:text="${geofenceSuccess}"></div>
+                    <form th:action="@{/update-geofence}" method="post">
+                        <div class="mb-2">
+                            <label class="small fw-semibold">ชื่อห้องเรียน / วิชา</label>
+                            <input type="text" name="classroomName" class="form-control form-control-sm" th:value="${classroomName}" required>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-4">
+                                <label class="small fw-semibold">Latitude ห้องเรียน</label>
+                                <input type="number" step="any" name="classroomLat" id="settingLat" class="form-control form-control-sm" th:value="${classroomLat}" required>
+                            </div>
+                            <div class="col-4">
+                                <label class="small fw-semibold">Longitude ห้องเรียน</label>
+                                <input type="number" step="any" name="classroomLng" id="settingLng" class="form-control form-control-sm" th:value="${classroomLng}" required>
+                            </div>
+                            <div class="col-4">
+                                <label class="small fw-semibold">รัศมีอนุญาต (เมตร)</label>
+                                <input type="number" step="any" name="allowedRadiusMeters" id="settingRadius" class="form-control form-control-sm" th:value="${allowedRadiusMeters}" required>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-secondary btn-sm w-100">อัปเดตพิกัดห้องเรียน</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ตารางประวัติการเช็คชื่อเข้าเรียน (Attendance Logs) -->
+    <div class="card mt-4">
+        <div class="card-header bg-white py-3 border-bottom">
+            <h5 class="mb-0 fw-bold text-primary">ประวัติการเช็คชื่อเข้าเรียน (Attendance Check-In Logs)</h5>
+        </div>
+        <div class="card-body">
+            <div th:if="${#lists.isEmpty(attendanceHistory)}" class="text-muted text-center py-3">
+                ยังไม่มีประวัติการเช็คชื่อในเซสชันนี้
+            </div>
+            <div th:if="${!#lists.isEmpty(attendanceHistory)}" class="table-responsive">
+                <table class="table table-bordered table-hover align-middle small">
+                    <thead class="table-light">
+                        <tr>
+                            <th>เวลาเช็คชื่อ</th>
+                            <th>รหัสนักศึกษา</th>
+                            <th>ชื่อ-นามสกุล</th>
+                            <th class="text-center">ระยะห่าง GPS</th>
+                            <th class="text-center">สถานะพิกัด</th>
+                            <th class="text-center">สถานะใบหน้า</th>
+                            <th class="text-center">สถานะรวม</th>
+                            <th>รายละเอียด</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr th:each="log : ${attendanceHistory}">
+                            <td th:text="${log.checkInTime}"></td>
+                            <td class="fw-bold" th:text="${log.studentId}"></td>
+                            <td th:text="${log.studentName}"></td>
+                            <td class="text-center" th:text="${log.distanceMeters + ' ม. (เกณฑ์ ' + log.allowedRadiusMeters + ' ม.)'}"></td>
+                            <td class="text-center">
+                                <span th:if="${log.locationVerified}" class="badge bg-success">อยู่ในพื้นที่</span>
+                                <span th:if="${!log.locationVerified}" class="badge bg-danger">นอกพื้นที่</span>
+                            </td>
+                            <td class="text-center">
+                                <span th:if="${log.faceVerified}" class="badge bg-success">ใบหน้าตรงกัน</span>
+                                <span th:if="${!log.faceVerified}" class="badge bg-danger">ใบหน้าไม่ตรง</span>
+                            </td>
+                            <td class="text-center">
+                                <span th:if="${log.overallSuccess}" class="badge bg-success px-2 py-1">เช็คชื่อสำเร็จ</span>
+                                <span th:if="${!log.overallSuccess}" class="badge bg-danger px-2 py-1">ไม่สำเร็จ</span>
+                            </td>
+                            <td th:text="${log.summaryMessage}"></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // คำนวณระยะห่าง Haversine บนฝั่ง Browser เพื่อแสดงผลทันทีเมื่อดึงพิกัด
+    function haversineMeters(lat1, lon1, lat2, lon2) {
+        const R = 6371000;
+        const toRad = x => x * Math.PI / 180;
+        const dLat = toRad(lat2 - lat1);
+        const dLon = toRad(lon2 - lon1);
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                  Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 100) / 100;
+    }
+
+    function updateGpsUI(lat, lng, sourceLabel) {
+        document.getElementById('userLat').value = lat.toFixed(6);
+        document.getElementById('userLng').value = lng.toFixed(6);
+
+        const targetLat = parseFloat(document.getElementById('targetLatDisplay').innerText);
+        const targetLng = parseFloat(document.getElementById('targetLngDisplay').innerText);
+        const radius = parseFloat(document.getElementById('targetRadiusDisplay').innerText);
+
+        const dist = haversineMeters(targetLat, targetLng, lat, lng);
+        const banner = document.getElementById('gpsStatusBanner');
+
+        if (dist <= radius) {
+            banner.className = 'alert alert-success py-2 px-3 mt-2 mb-0 small';
+            banner.innerHTML = `<strong>[ผ่านเกณฑ์สถานที่ - ${sourceLabel}]</strong> คุณอยู่ห่างจากห้องเรียน <strong>${dist} เมตร</strong> (อยู่ในรัศมี ${radius} เมตร)`;
+        } else {
+            banner.className = 'alert alert-danger py-2 px-3 mt-2 mb-0 small';
+            banner.innerHTML = `<strong>[อยู่นอกพื้นที่ห้องเรียน - ${sourceLabel}]</strong> คุณอยู่ห่างจากห้องเรียน <strong>${dist} เมตร</strong> (เกินรัศมีที่อนุญาต ${radius} เมตร)`;
+        }
+    }
+
+    function fetchRealGps() {
+        const banner = document.getElementById('gpsStatusBanner');
+        if (!navigator.geolocation) {
+            banner.className = 'alert alert-danger py-2 px-3 mt-2 mb-0 small';
+            banner.innerText = 'เบราว์เซอร์ของคุณไม่รองรับ Geolocation API';
+            return;
+        }
+        banner.className = 'alert alert-info py-2 px-3 mt-2 mb-0 small';
+        banner.innerText = 'กำลังดึงพิกัด GPS จากอุปกรณ์ของคุณ...';
+
+        navigator.geolocation.getCurrentPosition(
+            pos => {
+                updateGpsUI(pos.coords.latitude, pos.coords.longitude, 'GPS จริงจากอุปกรณ์');
+            },
+            err => {
+                banner.className = 'alert alert-warning py-2 px-3 mt-2 mb-0 small';
+                banner.innerHTML = `ไม่สามารถดึง GPS จริงได้ (${err.message}) — คุณสามารถกดปุ่ม <strong>"จำลองอยู่ในห้องเรียน"</strong> เพื่อทดสอบได้`;
+            },
+            { enableHighAccuracy: true, timeout: 8000 }
+        );
+    }
+
+    function simulateInsideClassroom() {
+        const targetLat = parseFloat(document.getElementById('targetLatDisplay').innerText);
+        const targetLng = parseFloat(document.getElementById('targetLngDisplay').innerText);
+        // สุ่มขยับพิกัดเล็กน้อยประมาณ ~15 เมตรจากจุดศูนย์กลางห้องเรียน
+        updateGpsUI(targetLat + 0.00010, targetLng + 0.00010, 'โหมดจำลองในห้องเรียน');
+    }
+
+    function simulateOutsideClassroom() {
+        const targetLat = parseFloat(document.getElementById('targetLatDisplay').innerText);
+        const targetLng = parseFloat(document.getElementById('targetLngDisplay').innerText);
+        // ขยับออกไปประมาณ ~550 เมตร
+        updateGpsUI(targetLat + 0.00500, targetLng + 0.00200, 'โหมดจำลองนอกห้องเรียน');
+    }
+
+    function setClassroomToMyLocation() {
+        if (!navigator.geolocation) {
+            alert('เบราว์เซอร์ไม่รองรับ Geolocation');
+            return;
+        }
+        navigator.geolocation.getCurrentPosition(pos => {
+            document.getElementById('settingLat').value = pos.coords.latitude.toFixed(6);
+            document.getElementById('settingLng').value = pos.coords.longitude.toFixed(6);
+        });
+    }
+
+    // ระบบเปิดกล้องเว็บแคมและถ่ายภาพเป็น Base64
+    async function startCamera(videoElementId) {
+        const video = document.getElementById(videoElementId);
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+            video.srcObject = stream;
+            video.classList.remove('d-none');
+        } catch (err) {
+            alert('ไม่สามารถเปิดกล้องเว็บแคมได้ (' + err.message + ') คุณยังสามารถอัปโหลดไฟล์ภาพแทนได้ครับ');
+        }
+    }
+
+    function capturePhoto(videoId, canvasId, previewId, hiddenInputId) {
+        const video = document.getElementById(videoId);
+        if (!video.srcObject) {
+            alert('กรุณากดปุ่ม "เปิดกล้องเว็บแคม" ก่อนถ่ายภาพครับ');
+            return;
+        }
+        const canvas = document.getElementById(canvasId);
+        const preview = document.getElementById(previewId);
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+        document.getElementById(hiddenInputId).value = dataUrl;
+        preview.src = dataUrl;
+        preview.classList.remove('d-none');
+    }
+
+    // ตั้งค่าเริ่มต้นให้จำลองพิกัดในห้องเรียนอัตโนมัติเพื่อความสะดวกในการทดสอบครั้งแรก
+    window.addEventListener('DOMContentLoaded', () => {
+        simulateInsideClassroom();
+    });
+</script>
+
+</body>
+</html>

@@ -1,0 +1,8 @@
+com/example/facecheckin/FaceCheckInMvcApplication.class
+com/example/facecheckin/controller/CheckInController.class
+com/example/facecheckin/model/StudentProfile.class
+com/example/facecheckin/service/CheckInService$2.class
+com/example/facecheckin/service/CheckInService.class
+com/example/facecheckin/service/CheckInService$1.class
+com/example/facecheckin/model/AlgorithmResult.class
+com/example/facecheckin/model/CheckInRecord.class
